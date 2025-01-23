@@ -1,134 +1,121 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, TextComponent } from 'obsidian';
 
-// Remember to rename these classes and interfaces!
-
-interface MyPluginSettings {
-	mySetting: string;
+// MCP types
+interface McpResponse {
+    content: Array<{
+        type: string;
+        text: string;
+    }>;
+    isError?: boolean;
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+interface McpClient {
+    useTool(serverName: string, toolName: string, args: any): Promise<McpResponse>;
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
-
-	async onload() {
-		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-	}
-
-	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+declare global {
+    interface Window {
+        mcp: McpClient;
+    }
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
+interface SocialPostsSettings {
+    mcpServerName: string;
 }
 
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+const DEFAULT_SETTINGS: SocialPostsSettings = {
+    mcpServerName: 'linkedin'
+};
 
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
+export default class SocialPostsPlugin extends Plugin {
+    settings: SocialPostsSettings;
+    app: App;
 
-	display(): void {
-		const {containerEl} = this;
+    override async onload(): Promise<void> {
+        await this.loadSettings();
 
-		containerEl.empty();
+        // Add ribbon icon
+        this.addRibbonIcon('share-2', 'Post to LinkedIn', async () => {
+            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (!activeView) {
+                new Notice('No active markdown view');
+                return;
+            }
 
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
-	}
+            const content = activeView.getViewData();
+            await this.postToLinkedIn(content);
+        });
+
+        // Add command
+        this.addCommand({
+            id: 'post-to-linkedin',
+            name: 'Post current note to LinkedIn',
+            editorCallback: async (editor: Editor) => {
+                const content = editor.getValue();
+                await this.postToLinkedIn(content);
+            }
+        });
+
+        // Add settings tab
+        this.addSettingTab(new SocialPostsSettingTab(this.app, this));
+    }
+
+    async postToLinkedIn(content: string): Promise<void> {
+        try {
+            // Use MCP to post to LinkedIn
+            const response = await window.mcp.useTool(
+                this.settings.mcpServerName,
+                'post_to_linkedin',
+                {
+                    text: content,
+                    visibility: 'PUBLIC'
+                }
+            );
+
+            if (response.isError) {
+                throw new Error(response.content[0].text);
+            }
+
+            new Notice('Successfully posted to LinkedIn!', 3000);
+        } catch (error: any) {
+            console.error('Failed to post to LinkedIn:', error);
+            new Notice(`Failed to post to LinkedIn: ${error.message}`, 5000);
+        }
+    }
+
+    async loadSettings() {
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    }
+
+    async saveSettings() {
+        await this.saveData(this.settings);
+    }
+}
+
+class SocialPostsSettingTab extends PluginSettingTab {
+    plugin: SocialPostsPlugin;
+
+    constructor(app: App, plugin: SocialPostsPlugin) {
+        super(app, plugin);
+        this.plugin = plugin;
+    }
+
+    override display(): void {
+        const {containerEl} = this;
+
+        containerEl.empty();
+
+        containerEl.createEl('h2', {text: 'Social Posts Settings'});
+
+        new Setting(containerEl)
+            .setName('MCP Server Name')
+            .setDesc('The name of the MCP server to use for LinkedIn integration')
+            .addText((text: TextComponent) => text
+                .setPlaceholder('linkedin')
+                .setValue(this.plugin.settings.mcpServerName)
+                .onChange(async (value: string) => {
+                    this.plugin.settings.mcpServerName = value;
+                    await this.plugin.saveSettings();
+                }));
+    }
 }
